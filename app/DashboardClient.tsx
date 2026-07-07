@@ -757,7 +757,7 @@ export default function DashboardClient({
                               <td className="py-3.5 pl-2 text-right">
                                 <div className="flex items-center justify-end gap-2">
                                   <a
-                                    href={file.url}
+                                    href={`/api/backup/download?url=${encodeURIComponent(file.url)}`}
                                     download={filename}
                                     target="_blank"
                                     rel="noreferrer"

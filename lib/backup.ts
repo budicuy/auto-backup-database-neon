@@ -396,7 +396,7 @@ export async function runBackupJob(
 
     console.log(`Uploading backup to Vercel Blob: ${filePath}`);
     const blobResult = await put(filePath, gzipBuffer, {
-      access: "public",
+      access: "private",
       contentType: "application/gzip",
       addRandomSuffix: false,
     });
