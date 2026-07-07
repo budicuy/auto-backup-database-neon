@@ -1,26 +1,28 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { runBackupJob } from '../../../lib/backup';
+import { type NextRequest, NextResponse } from "next/server";
+import { db } from "../../../db/index";
+import * as schema from "../../../db/schema";
+import { runBackupJob } from "../../../lib/backup";
 
 export const maxDuration = 300; // Allow up to 5 minutes on Vercel Hobby
-export const dynamic = 'force-dynamic';
+export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
-  return handleBackupRequest(req);
+  return handleCronBackup(req);
 }
 
 export async function POST(req: NextRequest) {
-  return handleBackupRequest(req);
+  return handleCronBackup(req);
 }
 
-async function handleBackupRequest(req: NextRequest) {
-  const authHeader = req.headers.get('Authorization');
+async function handleCronBackup(req: NextRequest) {
+  const authHeader = req.headers.get("Authorization");
   const secret = process.env.BACKUP_SECRET;
 
   if (!secret) {
     console.error("BACKUP_SECRET env variable is not configured");
     return NextResponse.json(
-      { error: 'Server configuration error: BACKUP_SECRET is not set' },
-      { status: 500 }
+      { error: "Server configuration error: BACKUP_SECRET is not set" },
+      { status: 500 },
     );
   }
 
@@ -28,35 +30,68 @@ async function handleBackupRequest(req: NextRequest) {
   if (!authHeader || authHeader !== `Bearer ${secret}`) {
     console.warn("Unauthorized backup attempt block.");
     return NextResponse.json(
-      { error: 'Unauthorized: Invalid or missing backup secret token' },
-      { status: 401 }
+      { error: "Unauthorized: Invalid or missing backup secret token" },
+      { status: 401 },
     );
   }
 
   try {
-    // Run scheduled backup (isManualOverride = false)
-    const result = await runBackupJob(false);
-    
-    if (result.skipped) {
+    // Fetch all database targets from config database
+    const targets = await db.select().from(schema.databases);
+
+    if (targets.length === 0) {
       return NextResponse.json({
-        message: result.message,
-        skipped: true,
-        lastSuccessAt: result.settings.lastSuccessAt
+        message: "No database targets registered for backup",
+        results: [],
       });
     }
 
-    return NextResponse.json({
-      message: 'Backup completed successfully',
-      skipped: false,
-      url: result.url,
-      path: result.path,
-      sizeBytes: result.sizeBytes
-    });
-  } catch (error: any) {
-    console.error("Backup API endpoint failed:", error);
+    const results = [];
+
+    // Run scheduled backup checks sequentially
+    for (const target of targets) {
+      try {
+        const res = await runBackupJob(target.id, false);
+        results.push({
+          id: target.id,
+          name: target.name,
+          status: res.skipped ? "SKIPPED" : "SUCCESS",
+          message: res.skipped ? res.message : "Backup completed",
+          url: !res.skipped ? res.url : undefined,
+        });
+      } catch (err: any) {
+        console.error(
+          `Scheduled backup failed for "${target.name}" (ID: ${target.id}):`,
+          err,
+        );
+        results.push({
+          id: target.id,
+          name: target.name,
+          status: "FAILED",
+          message: err.message || String(err),
+        });
+      }
+    }
+
+    const hasFailure = results.some((r) => r.status === "FAILED");
+
     return NextResponse.json(
-      { error: 'Backup failed', details: error.message || String(error) },
-      { status: 500 }
+      {
+        message: hasFailure
+          ? "Some scheduled backups failed"
+          : "All scheduled checks processed",
+        results,
+      },
+      { status: hasFailure ? 200 : 200 },
+    ); // Still return 200 so Vercel Cron registers a complete invocation
+  } catch (error: any) {
+    console.error("API Backup route cron failed completely:", error);
+    return NextResponse.json(
+      {
+        error: "General cron runner failure",
+        details: error.message || String(error),
+      },
+      { status: 500 },
     );
   }
 }

@@ -1,39 +1,47 @@
-import { getBackupSettings, listBackups } from './actions';
-import DashboardClient from './DashboardClient';
+import { db } from "../db/index";
+import * as schema from "../db/schema";
+import { listBackupsForDatabase } from "./actions";
+import DashboardClient from "./DashboardClient";
 
-export const dynamic = 'force-dynamic';
+export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  // Fetch settings and backup list concurrently on the server
-  const [settingsResult, backupsResult] = await Promise.all([
-    getBackupSettings(),
-    listBackups(),
-  ]);
+  // 1. Fetch all registered databases from central DB
+  const dbTargets = await db
+    .select()
+    .from(schema.databases)
+    .orderBy(schema.databases.createdAt);
 
-  const settings = settingsResult.success ? settingsResult.settings : null;
-  const backups = backupsResult.success && backupsResult.backups ? backupsResult.backups : [];
+  let initialBackups: any[] = [];
 
-  // Convert Date objects to JSON-serializable strings for client boundary
-  const serializableSettings = settings
-    ? {
-        ...settings,
-        lastSuccessAt: settings.lastSuccessAt
-          ? new Date(settings.lastSuccessAt).toISOString()
-          : null,
-        updatedAt: new Date(settings.updatedAt).toISOString(),
-      }
-    : null;
+  // 2. Prefetch backups for the first target database, if available
+  if (dbTargets.length > 0) {
+    const backupsRes = await listBackupsForDatabase(dbTargets[0].id);
+    if (backupsRes.success && backupsRes.backups) {
+      initialBackups = backupsRes.backups;
+    }
+  }
 
-  const serializableBackups = backups.map(b => ({
+  // 3. Serialize objects to pass JSON border safely
+  const serializableDatabases = dbTargets.map((d) => ({
+    ...d,
+    lastSuccessAt: d.lastSuccessAt
+      ? new Date(d.lastSuccessAt).toISOString()
+      : null,
+    createdAt: new Date(d.createdAt).toISOString(),
+    updatedAt: new Date(d.updatedAt).toISOString(),
+  }));
+
+  const serializableBackups = initialBackups.map((b) => ({
     url: b.url,
     pathname: b.pathname,
     size: b.size,
-    uploadedAt: new Date(b.uploadedAt).toISOString()
+    uploadedAt: new Date(b.uploadedAt).toISOString(),
   }));
 
   return (
     <DashboardClient
-      initialSettings={serializableSettings as any}
+      initialDatabases={serializableDatabases as any}
       initialBackups={serializableBackups}
     />
   );
